@@ -1,6 +1,7 @@
 use std::cmp::max;
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::text_vector::TextVector;
 
@@ -16,14 +17,14 @@ pub struct MovieVector {
     pub(crate) vote_count: usize,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Clone, Copy)]
 pub enum Genre {
     Drama,
     Comedy,
     Crime,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum Language {
     English,
     French,
@@ -31,7 +32,7 @@ pub enum Language {
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd)]
 pub struct ActorVector {
-    name: String,
+    pub(crate) id: Uuid,
     popularity: usize,
 }
 
