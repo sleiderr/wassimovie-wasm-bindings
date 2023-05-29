@@ -66,7 +66,7 @@ impl UserProfile {
         serde_json::from_str(raw_json).expect("Failed to load user profile !")
     }
 
-    pub fn insert_movie_interaction(&mut self, a: &MovieVector, interaction_weight: f32) {
+    pub async fn insert_movie_interaction(&mut self, a: &MovieVector, interaction_weight: f32) {
         self._vectorial_insertion_actor(
             &a.actors.iter().map(|act| act.id).collect(),
             interaction_weight,
@@ -74,13 +74,13 @@ impl UserProfile {
         self._vectorial_insertion_genre(&a.genres, interaction_weight);
         self._vectorial_insertion_lang(&a.original_lang, interaction_weight);
 
-        let invalidated = self._invalidate_cache(interaction_weight);
+        let invalidated = self._invalidate_cache(interaction_weight).await;
 
         self.text_rank
             .add_vector(a.description.clone(), invalidated);
     }
 
-    fn _invalidate_cache(&mut self, incoming_weight: f32) -> bool {
+    async fn _invalidate_cache(&mut self, incoming_weight: f32) -> bool {
         let mut relative_inc_weight =
             (self._profile_weight - (self._queued_weight + incoming_weight)) / self._profile_weight;
         if self._profile_weight == 0_f32 {
@@ -91,6 +91,13 @@ impl UserProfile {
             self._queued_weight = 0_f32;
             self._score_cache = HashMap::default();
             self.text_rank.reload_index();
+            let idx_db = crate::indexed_db::load_db()
+                .await
+                .expect("Failed to load database");
+            crate::indexed_db::save_profile(&idx_db, "profile", self)
+                .await
+                .expect("Failed to save profile");
+
             return true;
         }
         self._queued_weight += incoming_weight;
@@ -101,9 +108,7 @@ impl UserProfile {
     fn _vectorial_insertion_actor(&mut self, a: &Vec<Uuid>, inc_weight: f32) {
         a.iter()
             .map(|elem| match self.actors_rank.entry(*elem) {
-                indexmap::map::Entry::Occupied(e) => {
-                    *(e.into_mut()) += (inc_weight / a.len() as f32)
-                }
+                indexmap::map::Entry::Occupied(e) => *(e.into_mut()) += inc_weight / a.len() as f32,
                 indexmap::map::Entry::Vacant(v) => {
                     v.insert(inc_weight / a.len() as f32);
                 }
@@ -115,9 +120,7 @@ impl UserProfile {
     fn _vectorial_insertion_genre(&mut self, a: &[Genre], inc_weight: f32) {
         a.iter()
             .map(|elem| match self.genre_rank.entry(*elem) {
-                indexmap::map::Entry::Occupied(e) => {
-                    *(e.into_mut()) += (inc_weight / a.len() as f32)
-                }
+                indexmap::map::Entry::Occupied(e) => *(e.into_mut()) += inc_weight / a.len() as f32,
                 indexmap::map::Entry::Vacant(v) => {
                     v.insert(inc_weight / a.len() as f32);
                 }
@@ -198,6 +201,24 @@ impl UserProfile {
 
     fn _movie_similarity_by_lang(&self, a: &MovieVector) -> f32 {
         *self.lang_rank.get(&a.original_lang).unwrap_or(&0_f32)
+    }
+}
+
+impl UserProfile {
+    pub fn rank(&mut self, inputs: &mut [&MovieVector]) {
+        let mut score_map = HashMap::new();
+        inputs.sort_by(|a, b| {
+            let sim_a = match score_map.entry(a.uuid) {
+                Entry::Occupied(o) => *(o.into_mut()),
+                Entry::Vacant(v) => *(v.insert(self.similarity(a))),
+            };
+            let sim_b = match score_map.entry(b.uuid) {
+                Entry::Occupied(o) => o.into_mut(),
+                Entry::Vacant(v) => v.insert(self.similarity(b)),
+            };
+            sim_a.partial_cmp(sim_b).unwrap()
+        });
+        self._score_cache.extend(score_map.into_iter());
     }
 }
 
