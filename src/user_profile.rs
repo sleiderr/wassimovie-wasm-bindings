@@ -1,5 +1,5 @@
 use std::{
-    cmp::max,
+    cmp::{max, Ordering},
     collections::{hash_map::Entry, HashMap},
 };
 
@@ -8,13 +8,31 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    movie_similarity::{self, ActorVector, Genre, Language, MovieVector},
+    movie_similarity::{self, Genre, Language, MovieVector},
     text_vector::TextSpace,
 };
 
-type ActorMap = IndexMap<ActorVector, f32>;
+type ActorMap = IndexMap<Uuid, f32>;
 type GenreMap = IndexMap<Genre, f32>;
 type LanguageMap = HashMap<Language, f32>;
+
+macro_rules! _vectorial_insertion {
+    ($name:tt, $rank:tt, $v:tt: $t:ty ) => {
+        #[allow(clippy::ptr_arg)]
+        fn $name(&mut self, $v: $t, inc_weight: f32) {
+            $v.iter()
+                .map(|elem| match self.$rank.entry(*elem) {
+                    indexmap::map::Entry::Occupied(e) => {
+                        *(e.into_mut()) += (inc_weight / $v.len() as f32)
+                    }
+                    indexmap::map::Entry::Vacant(v) => {
+                        v.insert(inc_weight / $v.len() as f32);
+                    }
+                })
+                .last();
+        }
+    };
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct UserProfile {
@@ -22,8 +40,8 @@ pub struct UserProfile {
     genre_rank: GenreMap,
     lang_rank: LanguageMap,
     text_rank: TextSpace,
-    _size: usize,
-    _counter: usize,
+    _queued_weight: f32,
+    _profile_weight: f32,
     _score_cache: HashMap<Uuid, f32>,
 }
 
@@ -34,14 +52,57 @@ impl UserProfile {
             genre_rank: IndexMap::new(),
             lang_rank: HashMap::new(),
             text_rank: TextSpace::new(512),
-            _size: 0,
-            _counter: 0,
+            _queued_weight: 0_f32,
+            _profile_weight: 0_f32,
             _score_cache: HashMap::new(),
         }
     }
 
     pub fn load(raw_json: &str) -> Self {
         serde_json::from_str(raw_json).expect("Failed to load user profile !")
+    }
+
+    pub fn insert_movie_interaction(&mut self, a: &MovieVector, interaction_weight: f32) {
+        self._vectorial_insertion_actor(
+            &a.actors.iter().map(|act| act.id).collect(),
+            interaction_weight,
+        );
+        self._vectorial_insertion_genre(&a.genres, interaction_weight);
+        self._vectorial_insertion_lang(&a.original_lang, interaction_weight);
+
+        let invalidated = self._invalidate_cache(interaction_weight);
+
+        self.text_rank
+            .add_vector(a.description.clone(), invalidated);
+    }
+
+    fn _invalidate_cache(&mut self, incoming_weight: f32) -> bool {
+        let mut relative_inc_weight =
+            (self._profile_weight - (self._queued_weight + incoming_weight)) / self._profile_weight;
+        if self._profile_weight == 0_f32 {
+            relative_inc_weight = 1_f32;
+        }
+
+        if let Ordering::Greater = relative_inc_weight.abs().partial_cmp(&0.05_f32).unwrap() {
+            self._queued_weight = 0_f32;
+            self._score_cache = HashMap::default();
+            self.text_rank.reload_index();
+            return true;
+        }
+        self._queued_weight += incoming_weight;
+        false
+    }
+
+    _vectorial_insertion!(_vectorial_insertion_actor, actors_rank, a: &Vec<Uuid>);
+    _vectorial_insertion!(_vectorial_insertion_genre, genre_rank, a: &[Genre]);
+
+    fn _vectorial_insertion_lang(&mut self, a: &Language, inc_weight: f32) {
+        match self.lang_rank.entry(*a) {
+            Entry::Occupied(e) => *(e.into_mut()) += inc_weight,
+            Entry::Vacant(v) => {
+                v.insert(inc_weight);
+            }
+        };
     }
 
     pub fn rank(&mut self, inputs: &mut [&MovieVector]) {
@@ -72,8 +133,10 @@ impl UserProfile {
     }
 
     fn _similarity_calc(&self, a: &MovieVector) -> f32 {
-        let actor_score = self._vector_similarity::<ActorVector>(&a.actors, &self.actors_rank)
-            * movie_similarity::ACTORS_WEIGHT;
+        let actor_score = self._vector_similarity::<Uuid>(
+            &a.actors.iter().map(|act| act.id).collect(),
+            &self.actors_rank,
+        ) * movie_similarity::ACTORS_WEIGHT;
         let genre_score = self._vector_similarity::<Genre>(&a.genres, &self.genre_rank)
             * movie_similarity::GENRES_WEIGHT;
         let lang_score = self._movie_similarity_by_lang(a) * movie_similarity::LANG_WEIGHT;
