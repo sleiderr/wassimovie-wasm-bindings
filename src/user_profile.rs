@@ -6,6 +6,7 @@ use std::{
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use wasm_bindgen::prelude::*;
 
 use crate::{
     movie_similarity::{self, Genre, Language, MovieVector},
@@ -35,6 +36,7 @@ macro_rules! _vectorial_insertion {
 }
 
 #[derive(Serialize, Deserialize)]
+#[wasm_bindgen]
 pub struct UserProfile {
     actors_rank: ActorMap,
     genre_rank: GenreMap,
@@ -45,7 +47,9 @@ pub struct UserProfile {
     _score_cache: HashMap<Uuid, f32>,
 }
 
+#[wasm_bindgen]
 impl UserProfile {
+    #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
             actors_rank: IndexMap::new(),
@@ -93,8 +97,33 @@ impl UserProfile {
         false
     }
 
-    _vectorial_insertion!(_vectorial_insertion_actor, actors_rank, a: &Vec<Uuid>);
-    _vectorial_insertion!(_vectorial_insertion_genre, genre_rank, a: &[Genre]);
+    #[allow(clippy::ptr_arg)]
+    fn _vectorial_insertion_actor(&mut self, a: &Vec<Uuid>, inc_weight: f32) {
+        a.iter()
+            .map(|elem| match self.actors_rank.entry(*elem) {
+                indexmap::map::Entry::Occupied(e) => {
+                    *(e.into_mut()) += (inc_weight / a.len() as f32)
+                }
+                indexmap::map::Entry::Vacant(v) => {
+                    v.insert(inc_weight / a.len() as f32);
+                }
+            })
+            .last();
+    }
+
+    #[allow(clippy::ptr_arg)]
+    fn _vectorial_insertion_genre(&mut self, a: &[Genre], inc_weight: f32) {
+        a.iter()
+            .map(|elem| match self.genre_rank.entry(*elem) {
+                indexmap::map::Entry::Occupied(e) => {
+                    *(e.into_mut()) += (inc_weight / a.len() as f32)
+                }
+                indexmap::map::Entry::Vacant(v) => {
+                    v.insert(inc_weight / a.len() as f32);
+                }
+            })
+            .last();
+    }
 
     fn _vectorial_insertion_lang(&mut self, a: &Language, inc_weight: f32) {
         match self.lang_rank.entry(*a) {
@@ -103,22 +132,6 @@ impl UserProfile {
                 v.insert(inc_weight);
             }
         };
-    }
-
-    pub fn rank(&mut self, inputs: &mut [&MovieVector]) {
-        let mut score_map = HashMap::new();
-        inputs.sort_by(|a, b| {
-            let sim_a = match score_map.entry(a.uuid) {
-                Entry::Occupied(o) => *(o.into_mut()),
-                Entry::Vacant(v) => *(v.insert(self.similarity(a))),
-            };
-            let sim_b = match score_map.entry(b.uuid) {
-                Entry::Occupied(o) => o.into_mut(),
-                Entry::Vacant(v) => v.insert(self.similarity(b)),
-            };
-            sim_a.partial_cmp(sim_b).unwrap()
-        });
-        self._score_cache.extend(score_map.into_iter());
     }
 
     #[allow(clippy::map_entry)]
@@ -188,8 +201,20 @@ impl UserProfile {
     }
 }
 
-impl Default for UserProfile {
-    fn default() -> Self {
-        Self::new()
+impl UserProfile {
+    pub fn rank(&mut self, inputs: &mut [&MovieVector]) {
+        let mut score_map = HashMap::new();
+        inputs.sort_by(|a, b| {
+            let sim_a = match score_map.entry(a.uuid) {
+                Entry::Occupied(o) => *(o.into_mut()),
+                Entry::Vacant(v) => *(v.insert(self.similarity(a))),
+            };
+            let sim_b = match score_map.entry(b.uuid) {
+                Entry::Occupied(o) => o.into_mut(),
+                Entry::Vacant(v) => v.insert(self.similarity(b)),
+            };
+            sim_a.partial_cmp(sim_b).unwrap()
+        });
+        self._score_cache.extend(score_map.into_iter());
     }
 }

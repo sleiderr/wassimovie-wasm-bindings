@@ -2,9 +2,11 @@ use std::cmp::max;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use wasm_bindgen::prelude::*;
 
 use crate::text_vector::TextVector;
 
+#[wasm_bindgen]
 pub struct MovieVector {
     pub(crate) uuid: uuid::Uuid,
     pub(crate) actors: Vec<ActorVector>,
