@@ -204,9 +204,21 @@ impl UserProfile {
     }
 }
 
-impl Default for UserProfile {
-    fn default() -> Self {
-        Self::new()
+impl UserProfile {
+    pub fn rank(&mut self, inputs: &mut [&MovieVector]) {
+        let mut score_map = HashMap::new();
+        inputs.sort_by(|a, b| {
+            let sim_a = match score_map.entry(a.uuid) {
+                Entry::Occupied(o) => *(o.into_mut()),
+                Entry::Vacant(v) => *(v.insert(self.similarity(a))),
+            };
+            let sim_b = match score_map.entry(b.uuid) {
+                Entry::Occupied(o) => o.into_mut(),
+                Entry::Vacant(v) => v.insert(self.similarity(b)),
+            };
+            sim_a.partial_cmp(sim_b).unwrap()
+        });
+        self._score_cache.extend(score_map.into_iter());
     }
 }
 
